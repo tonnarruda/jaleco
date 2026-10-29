@@ -1,0 +1,16 @@
+# Porta 5433 para não conflitar com outro Postgres na 5432.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: jaleco-pg
+    environment:
+      POSTGRES_USER: jaleco
+      POSTGRES_PASSWORD: jaleco # só para desenvolvimento local
+      POSTGRES_DB: jaleco
+    ports:
+      - "5433:5432"
+    volumes:
+      - jaleco-pg-data:/var/lib/postgresql/data
+
+volumes:
+  jaleco-pg-data:
