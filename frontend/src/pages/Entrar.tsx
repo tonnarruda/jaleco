@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { acessoApi } from "../lib/api";
 import { useSessao } from "../sessao";
+import logo from "../assets/logo.jpg";
 
 export function Entrar() {
   const { usuario, aviso, entrou } = useSessao();
@@ -100,12 +101,8 @@ export function Entrar() {
 
 export function Marca() {
   return (
-    <div className="brand acesso-marca">
-      <span className="heart" aria-hidden>
-        ♥
-      </span>
-      <span className="brand-name">I Love Jalecos</span>
-      <span className="brand-sub">GESTÃO</span>
+    <div className="acesso-marca">
+      <img src={logo} alt="I Love Jalecos & Scrubs" width={220} height={220} />
     </div>
   );
 }
