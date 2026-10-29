@@ -176,8 +176,11 @@ func (s *Server) entrar(w http.ResponseWriter, r *http.Request) error {
 	if err := lerJSON(w, r, &corpo, limitePadrao); err != nil {
 		return err
 	}
-	// Mesma normalização do login: "X@loja.com" e " x@loja.com" são a mesma conta.
-	chave := ipDe(r) + "|" + strings.ToLower(strings.TrimSpace(corpo.Email))
+	// Por conta (e-mail normalizado como no login), não por IP: atrás do Vercel e do
+	// Render, o IP da conexão é do proxy e o cabeçalho com o IP real pode ser forjado
+	// por quem chama a API direto. Custo aceito: errar 5 vezes de propósito trava
+	// aquela conta por 15 minutos.
+	chave := strings.ToLower(strings.TrimSpace(corpo.Email))
 	if !s.login.permitido(chave) {
 		return errMuitasTentativas
 	}

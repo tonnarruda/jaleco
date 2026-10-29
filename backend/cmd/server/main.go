@@ -26,7 +26,11 @@ func main() {
 		os.Exit(linkAcesso(os.Args[2:]))
 	}
 
-	addr := flag.String("addr", envOu("ADDR", ":8080"), "endereço HTTP")
+	porta := ":8080"
+	if p := os.Getenv("PORT"); p != "" { // Render (e afins) informam a porta assim
+		porta = ":" + p
+	}
+	addr := flag.String("addr", envOu("ADDR", porta), "endereço HTTP")
 	dbURL := flag.String("db", envOu("DATABASE_URL", "postgres://jaleco:jaleco@localhost:5433/jaleco?sslmode=disable"), "URL do Postgres")
 	static := flag.String("static", envOu("STATIC_DIR", ""), "pasta do build do frontend (opcional)")
 	cookieSeguro := flag.Bool("cookie-seguro", os.Getenv("COOKIE_SEGURO") == "1", "cookie de sessão só por HTTPS (ligue em produção)")

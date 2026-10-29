@@ -1,0 +1,29 @@
+# Blueprint do Render: cria o banco e a API juntos (New > Blueprint, apontando este repositório).
+# Banco e API na mesma região, para a API falar com o banco pela rede interna do Render.
+
+databases:
+  - name: jaleco-db
+    databaseName: jaleco
+    user: jaleco
+    region: virginia
+    # ATENÇÃO: o plano gratuito do Postgres do Render expira (os dados são apagados).
+    # Antes de cadastrar dados reais, troque para um plano pago no painel do Render.
+    plan: free
+
+services:
+  - type: web
+    name: jaleco-api
+    runtime: docker
+    region: virginia
+    plan: free # dorme sem uso; a primeira requisição depois disso demora
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/saude
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jaleco-db
+          property: connectionString
+      # O app é servido por HTTPS (Vercel): cookie de sessão só por HTTPS.
+      - key: COOKIE_SEGURO
+        value: "1"

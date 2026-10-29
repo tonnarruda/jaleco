@@ -1,14 +1,12 @@
 package api
 
 import (
-	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 )
 
-// limitador conta tentativas erradas de login por chave (IP + e-mail) numa
+// limitador conta tentativas erradas de login por chave (o e-mail) numa
 // janela de tempo. Fica em memória: reinício do servidor zera a contagem.
 type limitador struct {
 	mu     sync.Mutex
@@ -54,16 +52,6 @@ func (l *limitador) limpar(chave string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.falhas, chave)
-}
-
-// ipDe usa o endereço da conexão. Atrás de um proxy reverso, todos viriam do
-// mesmo IP; aí o certo é configurar o proxy e ler o cabeçalho que ele garante.
-func ipDe(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // CaminhoSeguro tira o token de links de uso único antes de ir para o log:
