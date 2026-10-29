@@ -42,8 +42,35 @@ Usam o mesmo Postgres, cada teste num schema temporário que é apagado no fim.
 
 Variáveis da API: `DATABASE_URL` e `COOKIE_SEGURO=1` (obrigatório em produção, com HTTPS).
 
-## Produção (pendente)
+## Deploy (Render + Vercel)
 
-- Servir por **HTTPS** e ligar `COOKIE_SEGURO=1`; sem isso o cookie de sessão trafega aberto.
-- O limite de tentativas de login usa o IP da conexão: atrás de um proxy reverso, todos
-  chegam com o mesmo IP. Ajustar quando houver proxy.
+- **Render:** banco Postgres e API (`render.yaml` + `backend/Dockerfile`).
+- **Vercel:** frontend (`frontend/vercel.json`). O Vercel repassa `/api/*` para a API, então
+  o navegador vê um endereço só e o cookie de sessão funciona.
+
+1. **Render:** New → Blueprint → este repositório. Ele cria `jaleco-db` e `jaleco-api`.
+   - O plano gratuito do Postgres **expira e apaga os dados**: troque para pago antes de
+     cadastrar dados reais.
+2. Copie o endereço da API no Render (ex.: `https://jaleco-api.onrender.com`). Se for
+   diferente do que está em `frontend/vercel.json`, ajuste o `destination` e faça commit.
+3. **Vercel:** Add New → Project → este repositório, com **Root Directory = `frontend`**. O
+   resto o Vercel detecta (Vite, `npm run build`, saída `dist`).
+4. Abra o endereço do Vercel e crie o administrador **na hora** ("Gerar usuário
+   Administrador"): até isso acontecer, quem abrir o site primeiro vira admin.
+
+**Link de acesso pelo servidor em produção:** rode o comando na sua máquina apontando para o
+banco do Render (use a *External Database URL* do painel, com `?sslmode=require`):
+
+```sh
+cd backend
+DATABASE_URL='postgres://…?sslmode=require' APP_URL='https://<seu-app>.vercel.app' \
+  go run ./cmd/server link-acesso dona@loja.com
+```
+
+## Produção: limitações conhecidas
+
+- O limite de tentativas de login é **por conta (e-mail)**, não por IP: atrás do Vercel e do
+  Render o IP da conexão é do proxy. Quem errar a senha de uma conta 5 vezes de propósito a
+  trava por 15 minutos.
+- A contagem de tentativas fica em memória: reiniciar a API (ou ela dormir no plano gratuito)
+  zera a contagem.
