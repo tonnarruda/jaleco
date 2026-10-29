@@ -646,7 +646,8 @@ table.estoque .num { text-align: center; }
   box-shadow: 0 12px 32px rgba(17, 24, 39, 0.08);
   padding: 28px 24px 24px;
 }
-.acesso-marca { margin-bottom: 22px; }
+.acesso-marca { margin-bottom: 22px; text-align: center; }
+.acesso-marca img { width: 160px; height: auto; }
 .acesso-cartao h1 { font-size: 24px; margin-bottom: 6px; }
 .acesso-cartao .sub { margin: 0 0 18px; line-height: 1.5; }
 .acesso-cartao .fields { margin-top: 14px; }
