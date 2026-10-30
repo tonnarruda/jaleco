@@ -64,7 +64,7 @@ func New(l *loja.Store, log *slog.Logger, opcoes Opcoes) http.Handler {
 	mux.Handle("PUT /api/vendedores/{id}", s.com(administrador, s.salvarVendedor))
 	mux.Handle("DELETE /api/vendedores/{id}", s.com(administrador, s.excluirVendedor))
 	mux.Handle("POST /api/vendedores/{id}/convite", s.com(administrador, s.gerarConvite))
-	return mux
+	return cabecalhos(mux, opcoes.CookieSeguro)
 }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request) error

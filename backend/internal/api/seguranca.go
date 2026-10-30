@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,24 @@ func (l *limitador) limpar(chave string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.falhas, chave)
+}
+
+// cabecalhos protege as respostas da API, que também é alcançável direto no
+// Render, sem passar pelo Vercel. A API só devolve JSON: nada nela carrega
+// script nem pode ser emoldurado, e resposta com dados da loja não vai para cache.
+func cabecalhos(next http.Handler, https bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cache-Control", "no-store")
+		if https {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // CaminhoSeguro tira o token de links de uso único antes de ir para o log:
