@@ -91,3 +91,25 @@ func TestCookieSeguroEmProducao(t *testing.T) {
 		}
 	}
 }
+
+func TestCabecalhosDeSegurancaNaAPI(t *testing.T) {
+	for _, https := range []bool{false, true} {
+		// /api/saude não usa o banco: dá para montar a API sem loja.
+		h := New(nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Opcoes{CookieSeguro: https})
+		rec := chamar(h, "", "GET", "/api/saude", "")
+		for chave, valor := range map[string]string{
+			"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+			"X-Content-Type-Options":  "nosniff",
+			"X-Frame-Options":         "DENY",
+			"Cache-Control":           "no-store",
+		} {
+			if got := rec.Header().Get(chave); got != valor {
+				t.Errorf("https=%v, %s = %q, esperado %q", https, chave, got, valor)
+			}
+		}
+		// HSTS só faz sentido servido por HTTPS: em HTTP local o navegador ignoraria.
+		if got := rec.Header().Get("Strict-Transport-Security"); (got != "") != https {
+			t.Errorf("https=%v, Strict-Transport-Security = %q", https, got)
+		}
+	}
+}
