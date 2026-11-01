@@ -159,7 +159,7 @@ func (s *Store) Entrar(ctx context.Context, email, senha string) (Usuario, strin
 // entrada oferece criar o primeiro administrador.
 func (s *Store) TemAdministrador(ctx context.Context) (bool, error) {
 	var existe bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM vendedores WHERE papel = $1)`, PapelAdministrador).
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM vendedores WHERE papel = $1 AND NOT oculto)`, PapelAdministrador).
 		Scan(&existe)
 	return existe, err
 }
@@ -172,7 +172,7 @@ func (s *Store) GarantirConvitePrimeiroAdmin(ctx context.Context) (string, error
 	var token string
 	err := s.emTransacao(ctx, func(tx *sql.Tx) error {
 		var existe bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM vendedores WHERE papel = $1)`,
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM vendedores WHERE papel = $1 AND NOT oculto)`,
 			PapelAdministrador).Scan(&existe); err != nil {
 			return err
 		}
@@ -247,6 +247,35 @@ func (s *Store) GerarConvitePorEmail(ctx context.Context, email string) (token, 
 	return token, tipo, nome, expira, err
 }
 
+// CriarAcessoOculto cadastra a conta oculta (ou reaproveita a que já existe) e
+// devolve o link para criar ou trocar a senha. Quem já é da equipe não vira
+// oculto: sumiria da tela e a loja perderia de vista alguém que conhece.
+func (s *Store) CriarAcessoOculto(ctx context.Context, nome, email string) (token, tipo string, expira time.Time, err error) {
+	nome, email = strings.TrimSpace(nome), normalizarEmail(email)
+	if nome == "" {
+		return "", "", expira, ErrValidacao{"Informe o nome da conta oculta."}
+	}
+	if err := validarEmail(email); err != nil {
+		return "", "", expira, err
+	}
+	var id string
+	var oculto bool
+	err = s.db.QueryRowContext(ctx, `SELECT id, oculto FROM vendedores WHERE lower(email) = $1`, email).Scan(&id, &oculto)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		id = novoID()
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO vendedores (id, nome, papel, acesso, comissao, email, oculto)
+			VALUES ($1, $2, $3, 'Ativo', 0, $4, true)`, id, nome, PapelAdministrador, email); err != nil {
+			return "", "", expira, err
+		}
+	case err != nil:
+		return "", "", expira, err
+	case !oculto:
+		return "", "", expira, ErrValidacao{"Esse e-mail já é de alguém da equipe. A conta oculta precisa de outro e-mail."}
+	}
+	return s.GerarConvite(ctx, id)
+}
+
 // Convite é o que a tela mostra antes de a pessoa criar a senha.
 type Convite struct {
 	Tipo  string `json:"tipo"`
@@ -266,7 +295,7 @@ func buscarConvite(ctx context.Context, q queryer, token string, travar bool, ag
 		FROM convites c LEFT JOIN vendedores v ON v.id = c.vendedor_id
 		WHERE c.token_hash = $1 AND c.usado_em IS NULL AND c.expira_em > $2
 		AND (c.vendedor_id IS NULL OR v.acesso = 'Ativo')
-		AND (c.tipo <> 'primeiro-admin' OR NOT EXISTS (SELECT 1 FROM vendedores WHERE papel = 'Administrador'))`
+		AND (c.tipo <> 'primeiro-admin' OR NOT EXISTS (SELECT 1 FROM vendedores WHERE papel = 'Administrador' AND NOT oculto))`
 	if travar {
 		query += ` FOR UPDATE OF c`
 	}
@@ -345,7 +374,7 @@ func criarPrimeiroAdmin(ctx context.Context, tx *sql.Tx, d DadosConvite, hash st
 	}
 	// Outro link de primeiro acesso pode ter sido usado no meio-tempo.
 	var existe bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM vendedores WHERE papel = $1)`, PapelAdministrador).
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM vendedores WHERE papel = $1 AND NOT oculto)`, PapelAdministrador).
 		Scan(&existe); err != nil {
 		return u, err
 	}

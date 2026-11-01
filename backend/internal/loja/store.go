@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS vendedor_metas (
 	valor NUMERIC(12,2) NOT NULL CHECK (valor >= 0),
 	PRIMARY KEY (vendedor_id, desde)
 );
+
+-- Acesso oculto (suporte e auditoria): entra como Administrador, mas não aparece na
+-- equipe nem conta como administrador da loja. Só nasce pelo servidor (comando acesso-oculto).
+ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS oculto BOOLEAN NOT NULL DEFAULT false;
 `
 
 type Store struct {
@@ -312,7 +316,7 @@ func listarEstoque(ctx context.Context, q queryer) ([]ItemEstoque, error) {
 
 func listarVendedores(ctx context.Context, q queryer, vendedorID string) ([]Vendedor, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, nome, whatsapp, papel, acesso, comissao, coalesce(email, ''),
-		senha_hash IS NOT NULL FROM vendedores WHERE $1 = '' OR id = $1 ORDER BY nome`, vendedorID)
+		senha_hash IS NOT NULL FROM vendedores WHERE NOT oculto AND ($1 = '' OR id = $1) ORDER BY nome`, vendedorID)
 	if err != nil {
 		return nil, err
 	}
@@ -703,6 +707,9 @@ func (s *Store) SalvarVendedor(ctx context.Context, v Vendedor) error {
 		return err
 	}
 	return s.emTransacao(ctx, func(tx *sql.Tx) error {
+		if err := recusarOculto(ctx, tx, v.ID); err != nil {
+			return err
+		}
 		continuaAdmin := v.Papel == PapelAdministrador && v.Acesso == "Ativo"
 		if err := garantirOutroAdmin(ctx, tx, v.ID, continuaAdmin); err != nil {
 			return err
@@ -739,6 +746,9 @@ func (s *Store) SalvarVendedor(ctx context.Context, v Vendedor) error {
 // as vendas precisam continuar com nome; para tirar o acesso existe Inativo.
 func (s *Store) ExcluirVendedor(ctx context.Context, id string) error {
 	return s.emTransacao(ctx, func(tx *sql.Tx) error {
+		if err := recusarOculto(ctx, tx, id); err != nil {
+			return err
+		}
 		numeros, err := numerosDePedidos(ctx, tx, `SELECT numero FROM pedidos WHERE vendedor_id = $1 ORDER BY numero`, id)
 		if err != nil {
 			return err
@@ -759,8 +769,23 @@ func (s *Store) ExcluirVendedor(ctx context.Context, id string) error {
 	})
 }
 
+// recusarOculto faz a conta oculta não existir para a tela: ninguém da equipe a
+// vê, então também não a edita nem exclui pela API.
+func recusarOculto(ctx context.Context, tx *sql.Tx, id string) error {
+	var oculto bool
+	err := tx.QueryRowContext(ctx, `SELECT oculto FROM vendedores WHERE id = $1`, id).Scan(&oculto)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if oculto {
+		return ErrNaoEncontrado
+	}
+	return nil
+}
+
 // garantirOutroAdmin impede que a equipe fique sem nenhum Administrador ativo:
-// quem hoje é admin ativo só deixa de ser se houver outro.
+// quem hoje é admin ativo só deixa de ser se houver outro. A conta oculta não
+// conta: com ela, a loja ficaria sem administrador que enxerga.
 func garantirOutroAdmin(ctx context.Context, tx *sql.Tx, id string, continuaAdmin bool) error {
 	if continuaAdmin {
 		return nil
@@ -775,7 +800,7 @@ func garantirOutroAdmin(ctx context.Context, tx *sql.Tx, id string, continuaAdmi
 		return err
 	}
 	var outros int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM vendedores WHERE papel = $1 AND acesso = 'Ativo' AND id <> $2`,
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM vendedores WHERE papel = $1 AND acesso = 'Ativo' AND NOT oculto AND id <> $2`,
 		PapelAdministrador, id).Scan(&outros); err != nil {
 		return err
 	}
