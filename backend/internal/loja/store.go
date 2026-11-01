@@ -201,6 +201,15 @@ func (s *Store) EstadoPara(ctx context.Context, u Usuario) (Estado, error) {
 	return s.estado(ctx, u.ID)
 }
 
+// VendedoresPara devolve a equipe que o papel pode ver: gestor vê todos,
+// vendedor só o próprio cadastro. A conta oculta não sai para ninguém.
+func (s *Store) VendedoresPara(ctx context.Context, u Usuario) ([]Vendedor, error) {
+	if u.Gestor() {
+		return listarVendedores(ctx, s.db, "")
+	}
+	return listarVendedores(ctx, s.db, u.ID)
+}
+
 // estado com vendedorID != "" restringe pedidos e equipe àquela pessoa.
 func (s *Store) estado(ctx context.Context, vendedorID string) (Estado, error) {
 	e := Estado{}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -96,5 +97,36 @@ func TestErrosViramMensagem(t *testing.T) {
 	}
 	if rec := chamar(h, e.admin, "PUT", "/api/clientes/c1", `{nome`); rec.Code != 400 {
 		t.Fatalf("JSON quebrado: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestListarVendedores(t *testing.T) {
+	e := novoServidor(t)
+	nomes := func(sessao string) (int, []string) {
+		rec := chamar(e.h, sessao, "GET", "/api/vendedores", "")
+		var lista []loja.Vendedor
+		json.NewDecoder(rec.Body).Decode(&lista)
+		var out []string
+		for _, v := range lista {
+			out = append(out, v.Nome)
+		}
+		return rec.Code, out
+	}
+	token, _, _, err := e.loja.CriarAcessoOculto(context.Background(), "Suporte", "suporte@exemplo.com")
+	if err != nil || token == "" {
+		t.Fatalf("conta oculta: %v", err)
+	}
+
+	if code, _ := nomes(""); code != 401 {
+		t.Fatalf("sem sessão deveria ser 401, veio %d", code)
+	}
+	for nome, sessao := range map[string]string{"admin": e.admin, "gerente": e.ger} {
+		code, lista := nomes(sessao)
+		if code != 200 || strings.Join(lista, ",") != "Ana,Bia,Dona,Gil" {
+			t.Errorf("%s vê a equipe toda, sem a conta oculta: %d %v", nome, code, lista)
+		}
+	}
+	if code, lista := nomes(e.vend); code != 200 || strings.Join(lista, ",") != "Ana" {
+		t.Errorf("vendedora vê só o próprio cadastro: %d %v", code, lista)
 	}
 }
