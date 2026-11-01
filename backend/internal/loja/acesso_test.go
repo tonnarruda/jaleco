@@ -233,3 +233,64 @@ func TestVendedorSoVeEMexeNoQueEDele(t *testing.T) {
 		}
 	}
 }
+
+func TestAcessoOculto(t *testing.T) {
+	ctx := context.Background()
+	s := novaLoja(t)
+
+	token, tipo, _, err := s.CriarAcessoOculto(ctx, "Suporte", " Suporte@Exemplo.com ")
+	if err != nil || tipo != ConviteNovo {
+		t.Fatalf("criar conta oculta: %q %v", tipo, err)
+	}
+	// Sozinha, a conta oculta não configura o sistema: a loja ainda cria o próprio admin.
+	if tem, _ := s.TemAdministrador(ctx); tem {
+		t.Fatal("conta oculta não pode contar como administrador da loja")
+	}
+	oculto, _, err := s.UsarConvite(ctx, token, DadosConvite{Senha: "senha-do-suporte"})
+	if err != nil || oculto.Papel != PapelAdministrador {
+		t.Fatalf("conta oculta entra como Administrador: %+v %v", oculto, err)
+	}
+	if _, _, err := s.Entrar(ctx, "suporte@exemplo.com", "senha-do-suporte"); err != nil {
+		t.Fatalf("conta oculta entra com e-mail e senha: %v", err)
+	}
+
+	primeiro, err := s.GarantirConvitePrimeiroAdmin(ctx)
+	if err != nil || primeiro == "" {
+		t.Fatalf("com só a conta oculta, o link de primeiro admin tem que sair: %q %v", primeiro, err)
+	}
+	dona, _, err := s.UsarConvite(ctx, primeiro, DadosConvite{Nome: "Dona", Email: "dona@loja.com", Senha: "senha-da-dona"})
+	if err != nil {
+		t.Fatalf("conta oculta não pode impedir o primeiro admin: %v", err)
+	}
+
+	e, err := s.EstadoPara(ctx, oculto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Vendedores) != 1 || e.Vendedores[0].ID != dona.ID {
+		t.Fatalf("a equipe vista pela conta oculta deveria ser só a dona: %+v", e.Vendedores)
+	}
+
+	// A dona não deixa de ser admin contando com a conta oculta.
+	var ev ErrValidacao
+	rebaixar := Vendedor{ID: dona.ID, Nome: "Dona", Papel: PapelVendedor, Acesso: "Ativo", Email: "dona@loja.com"}
+	if err := s.SalvarVendedor(ctx, rebaixar); !errors.As(err, &ev) {
+		t.Fatalf("conta oculta não pode valer como o outro administrador, veio %v", err)
+	}
+	// Ninguém edita nem exclui a conta oculta pela API.
+	disfarce := Vendedor{ID: oculto.ID, Nome: "Outro", Papel: PapelVendedor, Acesso: "Inativo"}
+	if err := s.SalvarVendedor(ctx, disfarce); !errors.Is(err, ErrNaoEncontrado) {
+		t.Fatalf("editar conta oculta: %v", err)
+	}
+	if err := s.ExcluirVendedor(ctx, oculto.ID); !errors.Is(err, ErrNaoEncontrado) {
+		t.Fatalf("excluir conta oculta: %v", err)
+	}
+
+	// Quem é da equipe não vira oculto; a própria conta oculta só ganha link de nova senha.
+	if _, _, _, err := s.CriarAcessoOculto(ctx, "Dona", "dona@loja.com"); !errors.As(err, &ev) {
+		t.Fatalf("e-mail da equipe não pode virar conta oculta, veio %v", err)
+	}
+	if _, tipo, _, err := s.CriarAcessoOculto(ctx, "Suporte", "suporte@exemplo.com"); err != nil || tipo != ConviteRedefinicao {
+		t.Fatalf("rodar de novo gera link de nova senha: %q %v", tipo, err)
+	}
+}

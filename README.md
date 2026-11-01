@@ -11,6 +11,12 @@ cd backend && go run ./cmd/server       # API em :8080, cria as tabelas sozinha
 cd frontend && npm run dev              # app em :5173, repassa /api para :8080
 ```
 
+**Documentação da API (Swagger):** com `npm run dev` e a API no ar, abra
+http://localhost:5173/docs. A especificação fica em `backend/openapi.yaml`; o "Try it out"
+usa a sessão do app (entre antes pelo app ou pelo `POST /api/login` na própria página).
+Só existe no `npm run dev`: não entra no build nem no Vercel. O teste
+`TestOpenAPICobreTodasAsRotas` falha se uma rota de `api.go` não estiver no yaml (ou vice-versa).
+
 A API lê `DATABASE_URL` (padrão `postgres://jaleco:jaleco@localhost:5433/jaleco?sslmode=disable`).
 
 ## Testes
