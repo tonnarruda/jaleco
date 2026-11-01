@@ -61,6 +61,7 @@ func New(l *loja.Store, log *slog.Logger, opcoes Opcoes) http.Handler {
 	mux.Handle("POST /api/estoque/entrada", s.com(gestor, s.entradaEstoque))
 	mux.Handle("PATCH /api/estoque", s.com(gestor, s.ajustarEstoque))
 	mux.Handle("POST /api/estoque/remover", s.com(gestor, s.removerVariosEstoque))
+	mux.Handle("GET /api/vendedores", s.com(qualquerUsuario, s.listarVendedores))
 	mux.Handle("PUT /api/vendedores/{id}", s.com(administrador, s.salvarVendedor))
 	mux.Handle("DELETE /api/vendedores/{id}", s.com(administrador, s.excluirVendedor))
 	mux.Handle("POST /api/vendedores/{id}/convite", s.com(administrador, s.gerarConvite))
@@ -355,6 +356,16 @@ func (s *Server) removerVariosEstoque(w http.ResponseWriter, r *http.Request) er
 		return err
 	}
 	return s.responderEstado(w, r)
+}
+
+// listarVendedores devolve só a equipe, com as mesmas regras de papel do estado.
+func (s *Server) listarVendedores(w http.ResponseWriter, r *http.Request) error {
+	v, err := s.loja.VendedoresPara(r.Context(), usuarioDe(r))
+	if err != nil {
+		return err
+	}
+	escreverJSON(w, http.StatusOK, v)
+	return nil
 }
 
 func (s *Server) excluirVendedor(w http.ResponseWriter, r *http.Request) error {
