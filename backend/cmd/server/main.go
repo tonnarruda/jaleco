@@ -25,6 +25,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "link-acesso" {
 		os.Exit(linkAcesso(os.Args[2:]))
 	}
+	// go run ./cmd/server acesso-oculto suporte@exemplo.com "Suporte"
+	if len(os.Args) > 1 && os.Args[1] == "acesso-oculto" {
+		os.Exit(acessoOculto(os.Args[2:]))
+	}
 
 	porta := ":8080"
 	if p := os.Getenv("PORT"); p != "" { // Render (e afins) informam a porta assim
@@ -119,6 +123,41 @@ func linkAcesso(args []string) int {
 		fmt.Fprintln(os.Stderr, "erro:", err)
 		return 1
 	}
+	imprimirLink(nome, token, tipo, expira)
+	return 0
+}
+
+// acessoOculto cria a conta de suporte e auditoria: entra como Administrador,
+// mas não aparece na equipe. Rodado de novo, gera outro link (nova senha).
+func acessoOculto(args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, `uso: server acesso-oculto <e-mail> "<nome>"`)
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	store, err := loja.Open(ctx, envOu("DATABASE_URL", "postgres://jaleco:jaleco@localhost:5433/jaleco?sslmode=disable"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro ao abrir o banco:", err)
+		return 1
+	}
+	defer store.Close()
+
+	token, tipo, expira, err := store.CriarAcessoOculto(ctx, args[1], args[0])
+	var ev loja.ErrValidacao
+	switch {
+	case errors.As(err, &ev):
+		fmt.Fprintln(os.Stderr, ev.Msg)
+		return 1
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "erro:", err)
+		return 1
+	}
+	imprimirLink(args[1], token, tipo, expira)
+	return 0
+}
+
+func imprimirLink(nome, token, tipo string, expira time.Time) {
 	finalidade := "criar a senha"
 	if tipo == loja.ConviteRedefinicao {
 		finalidade = "definir uma nova senha (a antiga deixa de valer)"
@@ -126,7 +165,6 @@ func linkAcesso(args []string) int {
 	appURL := strings.TrimRight(envOu("APP_URL", "http://localhost:5173"), "/")
 	fmt.Printf("Link para %s %s, uso único, vale até %s:\n\n  %s/convite/%s\n\n",
 		nome, finalidade, expira.Format("02/01 15:04"), appURL, token)
-	return 0
 }
 
 // spa serve arquivos do build e devolve index.html para as rotas do React Router.

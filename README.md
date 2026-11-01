@@ -39,6 +39,11 @@ Usam o mesmo Postgres, cada teste num schema temporário que é apagado no fim.
   quem tem acesso ao servidor roda `cd backend && go run ./cmd/server link-acesso <e-mail>`
   e manda o link impresso para a pessoa. `APP_URL` define o endereço do link
   (padrão `http://localhost:5173`).
+- **Acesso oculto (suporte e auditoria):** `go run ./cmd/server acesso-oculto <e-mail> "<nome>"`
+  cria uma conta Administrador que não aparece na Equipe nem no Painel e não conta como
+  administrador da loja (não destrava o "Gerar usuário Administrador" nem deixa a loja ficar
+  sem admin visível). Imprime o link para criar a senha; rodado de novo, gera link de nova
+  senha. Não aceita e-mail de quem já é da equipe. Para remover, só pelo banco.
 
 Variáveis da API: `DATABASE_URL` e `COOKIE_SEGURO=1` (obrigatório em produção, com HTTPS).
 
