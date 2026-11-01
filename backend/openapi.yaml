@@ -1,0 +1,652 @@
+openapi: 3.1.0
+info:
+  title: I Love Jalecos — API
+  version: "1.0"
+  description: |
+    API da gestão da I Love Jalecos (pedidos, clientes, estoque e equipe).
+
+    **Sessão:** o login grava o cookie HttpOnly `jaleco_sessao`; as demais rotas leem
+    a sessão dele. Não há token no corpo nem no cabeçalho `Authorization`.
+
+    **Papéis:** Vendedor(a) vê e edita só os próprios pedidos e o próprio cadastro
+    (clientes, estoque e modelos são de todos); Gerente vê tudo, menos gerir a equipe;
+    Administrador vê tudo. A regra vale no servidor.
+
+    **Escritas devolvem o estado:** toda rota que altera dados responde com o `Estado`
+    que o papel de quem pediu pode ver, já com as regras do servidor aplicadas (número
+    do pedido, baixa de estoque, histórico de metas).
+
+    **Erros:** sempre `{"erro": "<mensagem>"}`, com texto pronto para a tela.
+
+    Este arquivo é conferido por `internal/api/openapi_test.go`: rota nova sem
+    documentação aqui faz o teste falhar.
+servers:
+  - url: /
+    description: Mesmo endereço do app (o Vercel e o Vite repassam /api para a API)
+
+tags:
+  - name: Acesso
+    description: Login, sessão e links de uso único
+  - name: Dados
+    description: Estado da loja
+  - name: Clientes
+    description: Cadastro de clientes
+  - name: Pedidos
+    description: Pedidos, com baixa de estoque pela etapa
+  - name: Estoque
+    description: Entrada, ajuste e remoção de estoque
+  - name: Equipe
+    description: Pessoas da equipe, metas e links de acesso
+
+security:
+  - sessao: []
+
+paths:
+  /api/saude:
+    get:
+      operationId: saude
+      tags: [Acesso]
+      summary: Verificação de saúde (usada pelo Render)
+      security: []
+      responses:
+        "200":
+          description: API no ar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /api/login:
+    post:
+      operationId: entrar
+      tags: [Acesso]
+      summary: Entrar com e-mail e senha
+      description: |
+        Abre a sessão e grava o cookie `jaleco_sessao`. Cinco tentativas erradas para o
+        mesmo e-mail em 15 minutos bloqueiam aquela conta até a janela passar (429).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, senha]
+              properties:
+                email: { type: string, format: email }
+                senha: { type: string, format: password }
+      responses:
+        "200":
+          description: Sessão aberta
+          headers:
+            Set-Cookie:
+              description: "`jaleco_sessao=<token>; HttpOnly; SameSite=Lax; Max-Age=2592000` (Secure em produção)"
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usuario" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "422":
+          description: E-mail ou senha incorretos (a mensagem não diz qual dos dois)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erro" }
+        "429":
+          description: Muitas tentativas erradas para este e-mail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erro" }
+
+  /api/logout:
+    post:
+      operationId: sair
+      tags: [Acesso]
+      summary: Sair
+      description: Encerra a sessão no banco e apaga o cookie. Funciona mesmo sem sessão.
+      security: []
+      responses:
+        "204":
+          description: Sessão encerrada
+
+  /api/sessao:
+    get:
+      operationId: sessao
+      tags: [Acesso]
+      summary: Quem está logado
+      responses:
+        "200":
+          description: Usuário da sessão
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usuario" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+
+  /api/configuracao:
+    get:
+      operationId: configuracao
+      tags: [Acesso]
+      summary: Se o sistema já tem administrador
+      description: A tela de entrada usa para mostrar ou esconder "Gerar usuário Administrador".
+      security: []
+      responses:
+        "200":
+          description: Situação do sistema
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [temAdministrador]
+                properties:
+                  temAdministrador: { type: boolean }
+
+  /api/primeiro-acesso:
+    post:
+      operationId: primeiroAcesso
+      tags: [Acesso]
+      summary: Gerar link do primeiro administrador
+      description: |
+        Só funciona enquanto não existe administrador. Quem usar o link primeiro vira
+        admin; os demais links morrem nessa hora.
+      security: []
+      responses:
+        "200":
+          description: Token do link de primeiro acesso (a tela monta `/convite/<token>`)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token]
+                properties:
+                  token: { type: string }
+        "422":
+          description: O sistema já tem administrador
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erro" }
+
+  /api/convites/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: Token do link de uso único
+        schema: { type: string }
+    get:
+      operationId: consultarConvite
+      tags: [Acesso]
+      summary: Consultar link de acesso
+      description: Diz se o link ainda vale e para quem é, antes de a pessoa criar a senha.
+      security: []
+      responses:
+        "200":
+          description: Link válido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Convite" }
+        "422": { $ref: "#/components/responses/ConviteInvalido" }
+    post:
+      operationId: usarConvite
+      tags: [Acesso]
+      summary: Usar link de acesso (criar ou trocar a senha)
+      description: |
+        Grava a senha, queima o link e já abre a sessão. No link de primeiro acesso,
+        `nome` e `email` criam o administrador; nos outros, só `senha` é usada.
+        Senha nova derruba as sessões abertas com a antiga.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [senha]
+              properties:
+                nome: { type: string, description: Só no primeiro acesso }
+                email: { type: string, format: email, description: Só no primeiro acesso }
+                senha: { type: string, format: password, minLength: 8, description: "8 a 72 bytes" }
+      responses:
+        "200":
+          description: Senha gravada e sessão aberta
+          headers:
+            Set-Cookie:
+              description: Cookie `jaleco_sessao` da sessão nova
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Usuario" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "422":
+          description: Link vencido ou usado, senha fora do tamanho, ou dados do primeiro admin inválidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erro" }
+
+  /api/estado:
+    get:
+      operationId: estado
+      tags: [Dados]
+      summary: Estado da loja que o papel pode ver
+      description: Vendedor(a) recebe só os próprios pedidos e o próprio cadastro na equipe.
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+
+  /api/clientes/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: salvarCliente
+      tags: [Clientes]
+      summary: Criar ou atualizar cliente
+      description: "Qualquer papel. O `id` vem do caminho (quem cria escolhe o id). O `id` do corpo é ignorado."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Cliente" }
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "422": { $ref: "#/components/responses/Validacao" }
+    delete:
+      operationId: excluirCliente
+      tags: [Clientes]
+      summary: Excluir cliente
+      description: |
+        Administrador ou Gerente. Cliente com pedido não pode ser excluído (422).
+        Id que não existe responde 200 (nada a excluir).
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "422": { $ref: "#/components/responses/Validacao" }
+
+  /api/pedidos/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: salvarPedido
+      tags: [Pedidos]
+      summary: Criar ou atualizar pedido
+      description: |
+        Qualquer papel. Vendedor(a) só registra em nome próprio e só altera os próprios
+        pedidos (pedido de outra pessoa responde 404). O `numero` é dado pelo servidor e
+        a baixa ou devolução de estoque acompanha a etapa (Orçamento e Cancelado não
+        seguram peça).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Pedido" }
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "404": { $ref: "#/components/responses/NaoEncontrado" }
+        "422": { $ref: "#/components/responses/Validacao" }
+    delete:
+      operationId: excluirPedido
+      tags: [Pedidos]
+      summary: Excluir pedido
+      description: |
+        Administrador ou Gerente. As peças voltam para o estoque se a etapa as segurava.
+        Id que não existe responde 200 (nada a excluir).
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+
+  /api/estoque/entrada:
+    post:
+      operationId: entradaEstoque
+      tags: [Estoque]
+      summary: Entrada de estoque
+      description: |
+        Administrador ou Gerente. Soma na variação existente (modelo + cor + tamanho,
+        sem diferenciar maiúsculas e espaços) ou cria uma nova.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ItemEstoque" }
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "422": { $ref: "#/components/responses/Validacao" }
+
+  /api/estoque:
+    patch:
+      operationId: ajustarEstoque
+      tags: [Estoque]
+      summary: Ajustar itens de estoque
+      description: Administrador ou Gerente. Os itens enviados são gravados todos ou nenhum.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itens]
+              properties:
+                itens:
+                  type: array
+                  items: { $ref: "#/components/schemas/Ajuste" }
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "404": { $ref: "#/components/responses/NaoEncontrado" }
+        "422": { $ref: "#/components/responses/Validacao" }
+
+  /api/estoque/remover:
+    post:
+      operationId: removerEstoque
+      tags: [Estoque]
+      summary: Remover itens de estoque
+      description: |
+        Administrador ou Gerente. Apaga os itens numa transação (ex.: todos os tamanhos de
+        um produto). Item usado em pedido não pode sair (422).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "422": { $ref: "#/components/responses/Validacao" }
+
+  /api/vendedores/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: salvarVendedor
+      tags: [Equipe]
+      summary: Criar ou atualizar pessoa da equipe
+      description: |
+        Administrador. Metas enviadas são gravadas ou corrigidas; vigência que não veio
+        continua no banco. Marcar como Inativo derruba as sessões e os links pendentes.
+        O sistema precisa de pelo menos um Administrador ativo (422).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Vendedor" }
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "400": { $ref: "#/components/responses/CorpoInvalido" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "404": { $ref: "#/components/responses/NaoEncontrado" }
+        "422": { $ref: "#/components/responses/Validacao" }
+    delete:
+      operationId: excluirVendedor
+      tags: [Equipe]
+      summary: Excluir pessoa da equipe
+      description: |
+        Administrador. Não exclui o próprio cadastro, quem está em pedido (use Inativo)
+        nem o último Administrador ativo (422).
+      responses:
+        "200": { $ref: "#/components/responses/Estado" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "404": { $ref: "#/components/responses/NaoEncontrado" }
+        "422": { $ref: "#/components/responses/Validacao" }
+
+  /api/vendedores/{id}/convite:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: gerarConvite
+      tags: [Equipe]
+      summary: Gerar link de acesso
+      description: |
+        Administrador. Convite se a pessoa ainda não tem senha, redefinição se já tem.
+        O link anterior deixa de valer. Vale 72 horas. Devolve só o token: a tela monta
+        `/convite/<token>` com o endereço em que está.
+      responses:
+        "200":
+          description: Link gerado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LinkAcesso" }
+        "401": { $ref: "#/components/responses/NaoAutenticado" }
+        "403": { $ref: "#/components/responses/SemPermissao" }
+        "404": { $ref: "#/components/responses/NaoEncontrado" }
+        "422":
+          description: Pessoa sem e-mail cadastrado ou Inativa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Erro" }
+
+components:
+  securitySchemes:
+    sessao:
+      type: apiKey
+      in: cookie
+      name: jaleco_sessao
+      description: Gravado pelo login ou pelo uso de um link de acesso. HttpOnly, 30 dias.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      description: Id do registro (escolhido por quem cria)
+      schema: { type: string }
+
+  responses:
+    Estado:
+      description: Estado da loja que o papel de quem pediu pode ver
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Estado" }
+    CorpoInvalido:
+      description: Corpo não é JSON válido ou passa de 1 MB
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erro" }
+          example: { erro: Corpo da requisição inválido. }
+    NaoAutenticado:
+      description: Sem sessão, sessão vencida ou pessoa Inativa
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erro" }
+          example: { erro: Sua sessão terminou. Entre de novo. }
+    SemPermissao:
+      description: O papel de quem pediu não permite a ação
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erro" }
+          example: { erro: Seu papel não permite essa ação. }
+    NaoEncontrado:
+      description: Registro não existe ou não é visível para quem pediu
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erro" }
+          example: { erro: Registro não encontrado. }
+    Validacao:
+      description: Regra de negócio recusou a alteração (mensagem pronta para a tela)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erro" }
+    ConviteInvalido:
+      description: Link já usado ou vencido
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Erro" }
+          example: { erro: "Este link não vale mais: já foi usado ou venceu. Peça um novo ao administrador." }
+
+  schemas:
+    Erro:
+      type: object
+      required: [erro]
+      properties:
+        erro: { type: string }
+
+    Papel:
+      type: string
+      enum: [Administrador, Gerente, Vendedor(a)]
+
+    Usuario:
+      type: object
+      required: [id, nome, papel, email]
+      properties:
+        id: { type: string }
+        nome: { type: string }
+        papel: { $ref: "#/components/schemas/Papel" }
+        email: { type: string, format: email }
+
+    Convite:
+      type: object
+      required: [tipo, nome, email]
+      properties:
+        tipo: { type: string, enum: [primeiro-admin, convite, redefinicao] }
+        nome: { type: string, description: Vazio no primeiro acesso }
+        email: { type: string, description: Vazio no primeiro acesso }
+
+    LinkAcesso:
+      type: object
+      required: [token, tipo, expiraEm]
+      properties:
+        token: { type: string }
+        tipo: { type: string, enum: [convite, redefinicao] }
+        expiraEm: { type: string, format: date-time }
+
+    Cliente:
+      type: object
+      properties:
+        id: { type: string, readOnly: true, description: "Na escrita, vale o id do caminho" }
+        nome: { type: string }
+        whatsapp: { type: string }
+        email: { type: string }
+        profissao: { type: string }
+        faculdade: { type: string }
+        instagram: { type: string }
+        cidade: { type: string }
+        aniversario: { type: string, description: "AAAA-MM-DD ou vazio" }
+        tamanhoHabitual: { type: string }
+        comoConheceu: { type: string }
+        endereco: { type: string }
+        observacoes: { type: string }
+
+    Peca:
+      type: object
+      properties:
+        id: { type: string }
+        modelo: { type: string }
+        cor: { type: string }
+        tamanho: { type: string }
+        quantidade: { type: integer, minimum: 0 }
+        nomeBordado: { type: string }
+        profissaoBordado: { type: string }
+        corLinha: { type: string }
+        adicional: { type: string }
+        precoUnitario: { type: number, minimum: 0 }
+
+    Pedido:
+      type: object
+      required: [etapa]
+      properties:
+        id: { type: string, readOnly: true, description: "Na escrita, vale o id do caminho" }
+        numero: { type: integer, readOnly: true, description: Dado pelo servidor na criação }
+        clienteId: { type: string }
+        vendedorId: { type: string, description: "Para Vendedor(a), o servidor força o próprio id" }
+        canal: { type: string, examples: [Instagram, WhatsApp, Indicação, Site, Presencial] }
+        dataPedido: { type: string, description: AAAA-MM-DD }
+        pecas:
+          type: array
+          items: { $ref: "#/components/schemas/Peca" }
+        etapa:
+          type: string
+          description: |
+            Obrigatória. O servidor só exige que não seja vazia; a tela usa Orçamento,
+            Aguardando arte, Arte aprovada, Em produção, Pronto, Enviado, Entregue e
+            Cancelado. Orçamento e Cancelado não baixam estoque.
+        prazoEntrega: { type: string, description: AAAA-MM-DD }
+        codigoRastreio: { type: string }
+        observacoes: { type: string }
+        formaPagamento: { type: string, examples: [Pix, Cartão de crédito, Cartão de débito, Dinheiro, Transferência] }
+        situacaoPagamento: { type: string, examples: [Pendente, Parcial, Pago] }
+        desconto: { type: number, minimum: 0 }
+        frete: { type: number, minimum: 0 }
+        valorPago: { type: number, minimum: 0 }
+
+    ItemEstoque:
+      type: object
+      required: [id, modelo, cor, tamanho, quantidade]
+      properties:
+        id: { type: string }
+        modelo: { type: string }
+        cor: { type: string }
+        tamanho: { type: string }
+        quantidade: { type: integer, minimum: 0 }
+        minimo: { type: integer, minimum: 0 }
+        precoVenda: { type: number, minimum: 0, description: 0 = sem preço cadastrado }
+
+    Ajuste:
+      type: object
+      required: [id, quantidade, minimo]
+      properties:
+        id: { type: string }
+        quantidade: { type: integer, minimum: 0 }
+        minimo: { type: integer, minimum: 0 }
+        precoVenda: { type: number, minimum: 0 }
+
+    Meta:
+      type: object
+      required: [desde, valor]
+      properties:
+        desde: { type: string, pattern: '^\d{4}-\d{2}$', description: "AAAA-MM: vale a partir deste mês até a próxima vigência" }
+        valor: { type: number, minimum: 0 }
+
+    Vendedor:
+      type: object
+      required: [nome, papel, acesso]
+      properties:
+        id: { type: string, readOnly: true, description: "Na escrita, vale o id do caminho" }
+        nome: { type: string }
+        whatsapp: { type: string }
+        papel: { $ref: "#/components/schemas/Papel" }
+        acesso: { type: string, enum: [Ativo, Inativo] }
+        comissao: { type: number, minimum: 0, maximum: 100 }
+        metas:
+          type: array
+          items: { $ref: "#/components/schemas/Meta" }
+        email: { type: string, format: email, description: É o login. Único na equipe. }
+        possuiLogin: { type: boolean, readOnly: true, description: Se a pessoa já criou a senha }
+
+    Estado:
+      type: object
+      required: [clientes, pedidos, estoque, vendedores, modelos]
+      properties:
+        clientes:
+          type: array
+          items: { $ref: "#/components/schemas/Cliente" }
+        pedidos:
+          type: array
+          items: { $ref: "#/components/schemas/Pedido" }
+        estoque:
+          type: array
+          items: { $ref: "#/components/schemas/ItemEstoque" }
+        vendedores:
+          type: array
+          items: { $ref: "#/components/schemas/Vendedor" }
+        modelos:
+          type: array
+          description: Na ordem de cadastro, os padrão primeiro
+          items: { type: string }
